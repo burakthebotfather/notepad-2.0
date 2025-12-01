@@ -56,7 +56,10 @@ async def main():
 
     app = ApplicationBuilder().token(bot_token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message))
-    await app.run_polling()
+    await app.initialize()
+await app.start()
+await app.updater.start_polling()
+await app.updater.idle()
 
 if __name__ == "__main__":
     import asyncio
