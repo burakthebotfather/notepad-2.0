@@ -2,6 +2,7 @@ import os
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
+from aiogram.client.default import DefaultBotProperties
 
 # --- Настройки ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -19,22 +20,18 @@ TRIGGER = "+"
 
 
 async def handle_message(message: Message):
-    """
-    Универсальный обработчик всех текстовых сообщений.
-    """
-    # Защита: если нет текста — игнорируем
     text = message.text or ""
-    chat = message.chat
-    chat_id = chat.id
-    thread_id = message.message_thread_id  # None если не тема
+    chat_id = message.chat.id
+    thread_id = message.message_thread_id
 
     # Только в разрешённых чатах и тредах
     if chat_id not in ALLOWED_THREADS:
         return
+
     if ALLOWED_THREADS[chat_id] != thread_id:
         return
 
-    # Если есть триггер — пересылаем админу
+    # Если есть триггер
     if TRIGGER in text:
         try:
             await message.bot.forward_message(
@@ -43,11 +40,10 @@ async def handle_message(message: Message):
                 message_id=message.message_id
             )
         except Exception as e:
-            # Логируем ошибку в консоль
-            print("Ошибка при forward_message (trigger):", e)
+            print("Ошибка при пересылке триггерного сообщения:", e)
         return
 
-    # Триггер не найден — отправляем ответ в тред
+    # Если триггера нет — ответ пользователю
     try:
         await message.reply(
             "Отметка отклонена. Причина: не обнаружен основной триггер. "
@@ -56,12 +52,12 @@ async def handle_message(message: Message):
     except Exception as e:
         print("Ошибка при reply:", e)
 
-    # Пересылаем админу сообщение + пометка «Отклонено»
+    # Пересылка админу с пометкой
     try:
         await message.bot.send_message(
             chat_id=TARGET_USER_ID,
-            text="❌ *Отклонено*\nСообщение пользователя:",
-            parse_mode="Markdown"
+            text="❌ <b>Отклонено</b>\nСообщение пользователя:",
+            parse_mode="HTML"
         )
         await message.bot.forward_message(
             chat_id=TARGET_USER_ID,
@@ -69,18 +65,19 @@ async def handle_message(message: Message):
             message_id=message.message_id
         )
     except Exception as e:
-        print("Ошибка при пересылке админу:", e)
+        print("Ошибка при отправке админу:", e)
 
 
 async def main():
-    bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
-    dp = Dispatcher()
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode="HTML")
+    )
 
-    # Регистрируем обработчик всех текстовых сообщений
+    dp = Dispatcher()
     dp.message.register(handle_message)
 
-    print("Бот запускается...")
-    # Запускаем polling
+    print("Бот запущен...")
     await dp.start_polling(bot)
 
 
