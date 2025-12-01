@@ -34,6 +34,9 @@ async def handle_message(message: Message):
     # Если есть триггер
     if TRIGGER in text:
         try:
+            # ЗАДЕРЖКА 5 МИНУТ
+            await asyncio.sleep(300)
+
             await message.bot.forward_message(
                 chat_id=TARGET_USER_ID,
                 from_chat_id=chat_id,
@@ -46,8 +49,8 @@ async def handle_message(message: Message):
     # Если триггера нет — ответ пользователю
     try:
         await message.reply(
-            "Отметка отклонена. Причина: не обнаружен основной триггер. "
-            "Пожалуйста, отправьте отметку повторно новым сообщением."
+            "Отметка отклонена: не обнаружен основной триггер. "
+            "Корректировка доступна в течение 5 минут после отправки."
         )
     except Exception as e:
         print("Ошибка при reply:", e)
