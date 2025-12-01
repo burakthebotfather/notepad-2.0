@@ -50,17 +50,17 @@ async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def main():
-    bot_token = os.getenv("BOT_TOKEN")
-    if not bot_token:
-        raise RuntimeError("BOT_TOKEN не найден в переменных окружения Railway!")
+    """Главная точка входа."""
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app = ApplicationBuilder().token(bot_token).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message))
-    await app.initialize()
-await app.start()
-await app.updater.start_polling()
-await app.updater.idle()
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Безопасный запуск polling (лучший вариант для Railway)
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    await application.updater.idle()
+
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
