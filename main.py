@@ -1,7 +1,7 @@
 import os
 import asyncio
 from datetime import datetime, timedelta
-import pytz
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
@@ -30,7 +30,7 @@ ALLOWED_THREADS = {
 }
 
 TRIGGER = "+"
-TZ = pytz.timezone("Europe/Minsk")
+TZ = ZoneInfo("Europe/Minsk")
 
 # pending = { msg_id: { "message": Message, "reply": Message, "corrected": bool } }
 pending = {}
