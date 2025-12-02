@@ -116,7 +116,7 @@ async def schedule_check(message_id: int):
         old, new = update_rating(msg.from_user.id, -0.1)
 
         try:
-            await msg.reply("Действий не предпринято. Рейтинг понижен!")
+            await msg.reply("Действий не предпринято. Рейтинг понижен на 0.1!")
         except:
             pass
 
@@ -159,7 +159,7 @@ async def handle_edited_message(message: Message):
         old, new = update_rating(message.from_user.id, +0.02)
 
         ok = await message.reply(
-            "Проверка прошла успешно. Отметка принята, рейтинг повышен."
+            "Проверка прошла успешно. Отметка принята, рейтинг повышен на 0.02."
         )
 
         await send_card_to_admin(
@@ -197,7 +197,7 @@ async def handle_message(message: Message):
         await asyncio.sleep(300)
         await send_card_to_admin(
             message.bot, message,
-            "ошибка исключена, отметка принята",
+            "Ошибка исключена, отметка принята. Рейтинг повышен на 0.05",
             rating_before=old,
             rating_after=new
         )
