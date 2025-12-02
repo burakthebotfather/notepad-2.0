@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 
+
 # ------------------ НАСТРОЙКИ ------------------
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -29,23 +30,63 @@ ALLOWED_THREADS = {
     -1002538985387: 3
 }
 
+SHOP_NAMES = {
+    (-1002079167705, 48): "A. Mousse Art Bakery - Белинского, 23",
+    (-1002936236597, 3): "B. Millionroz.by - Тимирязева, 67",
+    (-1002423500927, 2): "E. Flovi.Studio - Тимирязева, 65Б",
+    (-1003117964688, 5): "F. Flowers Titan - Мележа, 1",
+    (-1002864795738, 3): "G. Цветы Мира - Академическая, 6",
+    (-1002535060344, 5): "H. Kudesnica.by - Старовиленский тракт, 10",
+    (-1002477650634, 3): "I. Cvetok.by - Восточная, 41",
+    (-1003204457764, 4): "J. Jungle.by - Неманская, 2",
+    (-1002660511483, 3): "K. Pastel Flowers - Сурганова, 31",
+    (-1002360529455, 3): "333. ТЕСТ БОТОВ - 1-й Нагатинский пр-д",
+    (-1002538985387, 3): "L. Lamour.by - Кропоткина, 84"
+}
+
 TRIGGER = "+"
 TZ = ZoneInfo("Europe/Minsk")
 
 # pending = { msg_id: { "message": Message, "reply": Message, "corrected": bool } }
 pending = {}
 
+# user_ratings = { user_id: float }
+user_ratings = {}
+
+# ------------------ Рейтинг ------------------
+
+def get_rating(user_id: int) -> float:
+    return user_ratings.get(user_id, 5.0)
+
+def update_rating(user_id: int, delta: float):
+    old = get_rating(user_id)
+    new = max(0.0, min(5.0, old + delta))
+    user_ratings[user_id] = new
+    return old, new
+
+
 # -------------------------------------------------
 #        ФУНКЦИЯ: ПЕРЕСЫЛКА-КАРТОЧКА АДМИНУ
 # -------------------------------------------------
 
-async def send_card_to_admin(bot, user: Message, tag: str):
+async def send_card_to_admin(bot, user: Message, tag: str, rating_before=None, rating_after=None):
     tz_now = datetime.now(TZ).strftime("%d.%m.%y %H:%M:%S")
     username = f"@{user.from_user.username}" if user.from_user.username else "—"
     text = user.text or ""
 
+    shop_name = SHOP_NAMES.get((user.chat.id, user.message_thread_id), "Неизвестная точка")
+
+    rating_block = ""
+    if rating_before is not None:
+        rating_block = (
+            f"\n⭐ <b>Рейтинг:</b>\n"
+            f"до: <b>{rating_before:.2f}</b>\n"
+            f"после: <b>{rating_after:.2f}</b>\n"
+        )
+
     card = (
         f"📌 <b>{tag}</b>\n\n"
+        f"🏪 <b>Точка:</b> {shop_name}\n\n"
         f"👤 <b>Пользователь:</b> {user.from_user.full_name}\n"
         f"🆔 <b>ID:</b> <code>{user.from_user.id}</code>\n"
         f"🔗 <b>Username:</b> {username}\n\n"
@@ -53,9 +94,11 @@ async def send_card_to_admin(bot, user: Message, tag: str):
         f"📅 <b>Время сообщения:</b> {tz_now}\n"
         f"💬 <b>chat_id:</b> {user.chat.id}\n"
         f"🧵 <b>thread_id:</b> {user.message_thread_id}"
+        f"{rating_block}"
     )
 
     await bot.send_message(TARGET_USER_ID, card)
+
 
 # -------------------------------------------------
 #        ПОВТОРНАЯ ПРОВЕРКА ЧЕРЕЗ 5 МИНУТ
@@ -71,23 +114,29 @@ async def schedule_check(message_id: int):
     msg: Message = context["message"]
     reply_msg = context["reply"]
 
-    # пользователь НИЧЕГО не исправил
     if not context["corrected"]:
+        old, new = update_rating(msg.from_user.id, -0.1)
+
         try:
             await msg.reply("Действий не предпринято. Рейтинг понижен!")
         except:
             pass
 
-        await send_card_to_admin(msg.bot, msg, "требование об исправлении проигнорировано")
+        await send_card_to_admin(
+            msg.bot, msg,
+            "требование об исправлении проигнорировано",
+            rating_before=old,
+            rating_after=new
+        )
 
     pending.pop(message_id, None)
 
-    # удаляем предупреждение бота через 5 минут
     await asyncio.sleep(300)
     try:
         await reply_msg.delete()
     except:
         pass
+
 
 # -------------------------------------------------
 #        ОБРАБОТКА ИЗМЕНЁННЫХ СООБЩЕНИЙ
@@ -101,28 +150,33 @@ async def handle_edited_message(message: Message):
 
     context = pending[msg_id]
 
-    # Пользователь исправил и добавил '+'
     if TRIGGER in (message.text or ""):
         context["corrected"] = True
 
-        # удаляем старое предупреждение
         try:
             await context["reply"].delete()
         except:
             pass
 
+        old, new = update_rating(message.from_user.id, +0.05)
+
         ok = await message.reply(
-            "Проверка прошла успешно. Отметка принята, а рейтинг сохранен."
+            "Проверка прошла успешно. Отметка принята, рейтинг повышен."
         )
 
-        await send_card_to_admin(message.bot, message, "корректировка произведена вовремя")
+        await send_card_to_admin(
+            message.bot, message,
+            "корректировка произведена вовремя",
+            rating_before=old,
+            rating_after=new
+        )
 
-        # удаляем через 5 минут
         await asyncio.sleep(300)
         try:
             await ok.delete()
         except:
             pass
+
 
 # -------------------------------------------------
 #        ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ
@@ -138,13 +192,20 @@ async def handle_message(message: Message):
     if ALLOWED_THREADS[chat_id] != thread_id:
         return
 
-    # ------------------ ЕСЛИ ОТМЕТКА СРАЗУ КОРРЕКТНА ------------------
+    # ----- Если отметка сразу корректна -----
     if TRIGGER in text:
+        old, new = update_rating(message.from_user.id, +0.02)
+
         await asyncio.sleep(300)
-        await send_card_to_admin(message.bot, message, "ошибка исключена, отметка принята")
+        await send_card_to_admin(
+            message.bot, message,
+            "ошибка исключена, отметка принята",
+            rating_before=old,
+            rating_after=new
+        )
         return
 
-    # ------------------ ТРИГГЕРА НЕТ — ДАЁМ 5 МИНУТ ------------------
+    # ----- Триггера нет — даем 5 минут -----
 
     check_time = datetime.now(TZ) + timedelta(minutes=5)
     formatted = check_time.strftime("%d.%m.%y в %H:%M")
@@ -163,6 +224,7 @@ async def handle_message(message: Message):
 
     asyncio.create_task(schedule_check(message.message_id))
 
+
 # -------------------------------------------------
 #                      ЗАПУСК БОТА
 # -------------------------------------------------
@@ -179,6 +241,7 @@ async def main():
 
     print("Бот запущен...")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
