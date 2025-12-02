@@ -85,15 +85,13 @@ async def send_card_to_admin(bot, user: Message, tag: str, rating_before=None, r
         )
 
     card = (
-        f"📌 <b>{tag}</b>\n\n"
-        f"🏪 <b>Точка:</b> {shop_name}\n\n"
-        f"👤 <b>Пользователь:</b> {user.from_user.full_name}\n"
-        f"🆔 <b>ID:</b> <code>{user.from_user.id}</code>\n"
-        f"🔗 <b>Username:</b> {username}\n\n"
-        f"🗨 <b>Текст сообщения:</b>\n<code>{text}</code>\n\n"
-        f"📅 <b>Время сообщения:</b> {tz_now}\n"
-        f"💬 <b>chat_id:</b> {user.chat.id}\n"
-        f"🧵 <b>thread_id:</b> {user.message_thread_id}"
+        f"<b>{tag}</b>\n\n"
+        f"<b>Организация:</b> {shop_name}\n\n"
+        f"<b>Пользователь:</b> {user.from_user.full_name}\n"
+        f"<b>ID:</b> <code>{user.from_user.id}</code>\n"
+        f"<b>Username:</b> {username}\n\n"
+        f"<b>Текст сообщения:</b>\n<code>{text}</code>\n\n"
+        f"<b>Время отметки:</b> {tz_now}\n"
         f"{rating_block}"
     )
 
@@ -158,7 +156,7 @@ async def handle_edited_message(message: Message):
         except:
             pass
 
-        old, new = update_rating(message.from_user.id, +0.05)
+        old, new = update_rating(message.from_user.id, +0.02)
 
         ok = await message.reply(
             "Проверка прошла успешно. Отметка принята, рейтинг повышен."
@@ -194,7 +192,7 @@ async def handle_message(message: Message):
 
     # ----- Если отметка сразу корректна -----
     if TRIGGER in text:
-        old, new = update_rating(message.from_user.id, +0.02)
+        old, new = update_rating(message.from_user.id, +0.05)
 
         await asyncio.sleep(300)
         await send_card_to_admin(
