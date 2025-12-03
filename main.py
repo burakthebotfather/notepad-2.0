@@ -94,13 +94,13 @@ async def send_card_to_admin(bot, user: Message, tag: str, rating_before=None, r
         )
 
     card = (
-        f"📌 <b>{tag}</b>\n\n"
-        f"🏪 <b>Организация:</b> {shop}\n\n"
-        f"👤 <b>Пользователь:</b> {user.from_user.full_name}\n"
-        f"🆔 <b>ID:</b> <code>{user.from_user.id}</code>\n"
-        f"🔗 <b>Username:</b> {username}\n\n"
-        f"🗨 <b>Текст сообщения:</b>\n<pre>{escape_html(text)}</pre>\n\n"
-        f"📅 <b>Время отметки:</b> {tz_now}\n"
+        f"<b>{tag}</b>\n\n"
+        f"<b>Организация:</b> {shop}\n\n"
+        f"<b>Пользователь:</b> {user.from_user.full_name}\n"
+        f"<b>ID:</b> <code>{user.from_user.id}</code>\n"
+        f"<b>Username:</b> {username}\n\n"
+        f"<b>Текст сообщения:</b>\n<pre>{escape_html(text)}</pre>\n\n"
+        f"<b>Время отметки:</b> {tz_now}\n"
         f"{rating_block}"
     )
 
@@ -354,7 +354,7 @@ async def handle_message(message: Message):
         # Личную карточку водителю тоже отправит schedule_check ниже, поэтому
         # всё же создаём тут pending-заметку чтобы schedule_check выполнил отправку ЛК.
         # Создаём фиктивный reply, чтобы код удаления работал корректно.
-        reply = await message.reply("Отметка принята. Инфо отправлено админу.")
+        reply = await message.reply("(тестовый режим) Отметка принята. Рейтинг повышен на 0.02!")
         pending[message.message_id] = {
             "message": message,
             "reply": reply,
