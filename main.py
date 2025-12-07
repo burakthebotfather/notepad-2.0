@@ -413,28 +413,30 @@ async def schedule_check(message_id: int):
 
 async def handle_edited_message(message: Message):
     msg_id = message.message_id
-    # recompute triggers and value
+
+    # пересчитываем триггеры и значение по новому тексту
     new_value, new_triggers = parse_triggers_and_value(message.text or "")
 
     if msg_id not in pending:
-        # скорректируем daily_stats (если запись есть)
+        # скорректируем daily_stats, если запись есть
         adjust_daily_stats_on_edit(message, 0.0)
         return
 
     context = pending[msg_id]
     old_value = context.get("value", 0.0)
+
     if abs(new_value - old_value) > 1e-9:
         # обновляем глобальную сумму
         global daily_trigger_sum
         daily_trigger_sum += (new_value - old_value)
         context["value"] = new_value
-        # и обновим запись в daily_stats
+        # обновляем запись в daily_stats
         adjust_daily_stats_on_edit(message, old_value)
 
     # если теперь в тексте есть '+', считаем как исправление
     if "+" in (message.text or ""):
         context["corrected"] = True
-        # если был reply — удалим
+        # удаляем reply, если он был
         try:
             if context.get("reply"):
                 await context["reply"].delete()
@@ -458,6 +460,9 @@ async def handle_edited_message(message: Message):
                 pass
         except:
             pass
+
+    # --- исправленная часть: отправляем пользователю **текущий текст** ---
+    await send_card_to_user(message.bot, message)  # теперь всегда берём message.text
 
 # ------------------ PRIVATE COMMANDS (личные команды от пользователя) ------------------
 
