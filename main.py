@@ -1,4 +1,3 @@
-# main.py
 import os
 import re
 import asyncio
@@ -17,7 +16,7 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не найден!")
 
 # Уникальный админ (ему не приходят личные карточки, /zero только ему доступна)
-TARGET_USER_ID = int(os.getenv("TARGET_USER_ID", "542345855"))
+TARGET_USER_ID = 542345855
 
 TZ = ZoneInfo("Europe/Minsk")
 
@@ -71,11 +70,8 @@ muted_users = set()
 # daily_stats = { user_id: { (chat_id, thread_id): [ { 'message_id':..., 'text':..., 'ts':datetime, 'value':float, 'triggers': [..] } , ... ] } }
 daily_stats = defaultdict(lambda: defaultdict(list))
 
-# daily_trigger_sum: глобальная сумма BYN за текущие сутки (всех триггеров)
+# daily_trigger_sum: сумма в BYN за текущие сутки (всех триггеров)
 daily_trigger_sum = 0.0
-
-# driver_income: { user_id: float } — накопленный доход водителя за период от обновления до обновления счётчика
-driver_income = defaultdict(float)
 
 # ------------------ РЕЙТИНГ ------------------
 
@@ -91,7 +87,7 @@ def update_rating(user_id: int, delta: float):
 # ------------------ HELPERS ------------------
 
 def shop_name_for_message(msg: Message) -> str:
-    return SHOP_NAMES.get((msg.chat.id, msg.message_thread_id), "[индивидуальный отчёт]")
+    return SHOP_NAMES.get((msg.chat.id, msg.message_thread_id), "Неизвестная точка")
 
 def format_dt_for_card(dt: datetime) -> str:
     return dt.astimezone(TZ).strftime("%d.%m.%y %H:%M:%S")
@@ -100,39 +96,48 @@ def format_date_long(dt: datetime) -> str:
     return dt.astimezone(TZ).strftime("%d.%m.%Y")
 
 def format_byn(value: float) -> str:
-    # format with comma decimal separator
     return f"{value:.2f}".replace(".", ",")
 
 def escape_html(text: str) -> str:
     return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 # ------------------ ТРИГГЕР-ПАРСЕР ------------------
-# Алгоритм и regex'ы взяты из исходного кода — адаптированы под регистронезависимость и аккуратный вывод.
+# Алгоритм:
+# 1) ищем цветные "мк" (с возможным ведущим '+')
+# 2) ищем "мк" без цвета
+# 3) ищем слитные множители для "габ" (\d+габ) и затем одиночные "габ"
+# 4) учитываем не попавшие в предыдущие элементы одиночные символы '+'
+# При всех совпадениях: суммируем значение в BYN и возвращаем список найденных триггеров для записи.
 
+# Компилируем регулярки:
 COLOR_WORDS = [
     "синяя","красная","оранжевая","салатовая","коричневая",
     "светло-?серая","розовая","темно-?серая","голубая"
 ]
 COLOR_RE = r"(?:%s)" % "|".join(COLOR_WORDS)
+# ищем варианты типа "+ мк синяя", "+мк синяя", "мк синяя" (предпочитаем наличие 'мк')
 RE_MK_COLOR = re.compile(r"(\+)?\s*мк\.?\s*(" + COLOR_RE + r")\b", flags=re.IGNORECASE)
+# общие "мк" без цвета: "+ мк", "+мк", "мк", "мк."
 RE_MK = re.compile(r"(\+)?\s*мк\.?\b", flags=re.IGNORECASE)
+# множитель для габ: "3габ" (только слипшийся), либо "+3габ" или "3габ"
 RE_GAB_MULT = re.compile(r"(?<!\d)(\d+)габ\b", flags=re.IGNORECASE)
+# одиночный "габ"
 RE_GAB = re.compile(r"(?<!\d)габ\b", flags=re.IGNORECASE)
+# одиночные плюсы
 RE_PLUS = re.compile(r"\+")
 
 def parse_triggers_and_value(text: str):
     """
     Возвращает tuple (total_value_byn: float, triggers_list: list of dict)
     triggers_list содержит элементы вида:
-      {"type": "mk_color", "color": "синяя", "span": (s,e), "value": 4.05, "raw": "+ мк синяя"}
-    raw — кусок текста, как он был в исходном сообщении (с сохранением регистра).
+      {"type": "mk_color", "color": "синяя", "span": (s,e), "value": 4.05}
     """
     global MK_COLOR_VALUES, MK_GENERIC, GAB_VALUE, TRIGGER_BASE_PLUS
 
     if not text:
         return 0.0, []
 
-    stext_lower = text.lower()
+    stext = text.lower()
     used_spans = []
     triggers = []
     total = 0.0
@@ -144,109 +149,85 @@ def parse_triggers_and_value(text: str):
         return False
 
     # 1) цветные мк
-    for m in RE_MK_COLOR.finditer(text):
+    for m in RE_MK_COLOR.finditer(stext):
         s, e = m.span()
         if span_overlaps(s, e):
             continue
         color_raw = m.group(2)
-        color_norm = color_raw.lower().replace("-", "")
-        val = MK_COLOR_VALUES.get(color_norm)
+        # normalize color (remove dash)
+        color_norm = color_raw.replace("-", "")
+        color_norm = color_norm.replace("́", "")  # in case
+        # match key in mapping: allow both with and without hyphen forms
+        # try direct, then replace hyphen
+        val = None
+        # try exact raw
+        key = color_raw.replace("-", "")
+        # find mapping by iterating keys lowercased and removing hyphens
+        for k, v in MK_COLOR_VALUES.items():
+            if k.replace("-", "") == key:
+                val = v
+                break
+            if k == color_raw:
+                val = v
+                break
         if val is None:
-            # try match keys ignoring hyphen
-            for k, v in MK_COLOR_VALUES.items():
-                if k.replace("-", "") == color_norm:
-                    val = v
-                    break
-        if val is None:
+            # fallback to generic mk
             val = MK_GENERIC
-        raw_slice = text[s:e].strip()
-        triggers.append({"type": "mk_color", "color": color_raw, "span": (s, e), "value": val, "raw": raw_slice})
+        triggers.append({"type": "mk_color", "color": color_raw, "span": (s, e), "value": val})
         used_spans.append((s, e))
         total += val
 
     # 2) mk generic (non-colored)
-    for m in RE_MK.finditer(text):
+    for m in RE_MK.finditer(stext):
         s, e = m.span()
+        # skip if overlaps colored matches
         if span_overlaps(s, e):
             continue
-        raw_slice = text[s:e].strip()
-        triggers.append({"type": "mk", "span": (s, e), "value": MK_GENERIC, "raw": raw_slice})
+        # ensure it's not part of other word (regex already uses boundary)
+        triggers.append({"type": "mk", "span": (s, e), "value": MK_GENERIC})
         used_spans.append((s, e))
         total += MK_GENERIC
 
     # 3) gab with multiplier (only concatenated, like "3габ")
-    for m in RE_GAB_MULT.finditer(text):
+    for m in RE_GAB_MULT.finditer(stext):
         s, e = m.span()
         if span_overlaps(s, e):
             continue
         mul = int(m.group(1))
         val = mul * GAB_VALUE
-        raw_slice = text[s:e].strip()
-        triggers.append({"type": "gab_mult", "mult": mul, "span": (s, e), "value": val, "raw": raw_slice})
+        triggers.append({"type": "gab_mult", "mult": mul, "span": (s, e), "value": val})
         used_spans.append((s, e))
         total += val
 
     # 4) standalone "габ"
-    for m in RE_GAB.finditer(text):
+    for m in RE_GAB.finditer(stext):
         s, e = m.span()
         if span_overlaps(s, e):
             continue
-        raw_slice = text[s:e].strip()
-        triggers.append({"type": "gab", "span": (s, e), "value": GAB_VALUE, "raw": raw_slice})
+        triggers.append({"type": "gab", "span": (s, e), "value": GAB_VALUE})
         used_spans.append((s, e))
         total += GAB_VALUE
 
     # 5) remaining plus signs not covered by above spans
-    for m in RE_PLUS.finditer(text):
+    for m in RE_PLUS.finditer(stext):
         s, e = m.span()
         if span_overlaps(s, e):
             continue
-        raw_slice = text[s:e].strip()
-        triggers.append({"type": "plus", "span": (s, e), "value": TRIGGER_BASE_PLUS, "raw": raw_slice})
+        # count this plus as base
+        triggers.append({"type": "plus", "span": (s, e), "value": TRIGGER_BASE_PLUS})
         used_spans.append((s, e))
         total += TRIGGER_BASE_PLUS
 
     return total, triggers
-
-def triggers_to_strings(triggers: list) -> list:
-    """
-    Возвращает список строк-описаний триггеров в том виде, как они были найдены в тексте.
-    Сохраняется исходный фрагмент raw (с оригинальным регистром).
-    Если raw отсутствует — генерируем читаемую метку.
-    """
-    out = []
-    for t in triggers:
-        raw = t.get("raw")
-        if raw:
-            # normalize spaces
-            s = " ".join(raw.split())
-            out.append(s)
-        else:
-            if t["type"] == "mk_color":
-                out.append(f"+ мк {t.get('color', '')}".strip())
-            elif t["type"] == "mk":
-                out.append("+ мк")
-            elif t["type"] == "gab":
-                out.append("габ")
-            elif t["type"] == "gab_mult":
-                out.append(f"{t.get('mult',1)}габ")
-            elif t["type"] == "plus":
-                out.append("+")
-            else:
-                out.append(t["type"])
-    return out
 
 # ------------------ СТРОКИ КАРТОЧЕК ------------------
 
 async def send_card_to_admin(bot, original_msg: Message, per_msg_value: float, s_total: float):
     """
     Отправляет специальную карточку ТОЛЬКО TARGET_USER_ID в требуемом формате (без смайликов):
-    Формат:
-    +{per_msg} BYN | {shop} | {s_total} BYN
-    [полный текст сообщения от (исходного) пользователя]  <-- в виде цитаты (экранируем HTML)
-    username / id ID
-    T-Driver income: {driver_income for that user}
-    Online: HH:MM:SS  (время с первого сообщения пользователя за период)
+    A. [Название точки] +2,55 BYN; S = 65,50 BYN
+    username [ник]/id [ID]
+    ул. Богдановича, 123 + [полный текст сообщения]
     """
     if TARGET_USER_ID is None:
         return
@@ -259,54 +240,23 @@ async def send_card_to_admin(bot, original_msg: Message, per_msg_value: float, s
     per_msg_str = format_byn(per_msg_value)
     s_total_str = format_byn(s_total)
 
-    # driver income for this user (may be 0)
-    drv_income = driver_income.get(uid, 0.0)
-    drv_income_str = format_byn(drv_income)
-
-    # "Online" - compute period since first message from this user in daily_stats (if any)
-    online_str = "00:00:00"
-    user_entries = daily_stats.get(uid, {})
-    first_ts = None
-    for key, entries in user_entries.items():
-        if entries:
-            candidate = entries[0].get("ts")
-            if first_ts is None or candidate < first_ts:
-                first_ts = candidate
-    if first_ts:
-        delta = datetime.now(TZ) - first_ts
-        # format HH:MM:SS
-        total_seconds = int(delta.total_seconds())
-        hrs = total_seconds // 3600
-        mins = (total_seconds % 3600) // 60
-        secs = total_seconds % 60
-        online_str = f"{hrs:02d}:{mins:02d}:{secs:02d}"
-
-    # Build card
-    # First line: +per_msg BYN | Shop | s_total BYN
-    line1 = f"+{per_msg_str} BYN | {shop} | {s_total_str} BYN"
-    # Quote message text (escape html)
-    quoted = escape_html(text)
-    lines = [
-        line1,
-        f"<i>{quoted}</i>",
+    card_lines = [
+        f"{shop} +{per_msg_str} BYN; S = {s_total_str} BYN",
         f"{username} / id {uid}",
-        f"T-Driver income: {drv_income_str} BYN",
-        f"Online: {online_str}"
+        f"{escape_html(text)}"
     ]
-    card = "\n".join(lines)
+    card = "\n".join(card_lines)
 
     try:
         await bot.send_message(TARGET_USER_ID, card, parse_mode="HTML")
     except Exception:
         pass
 
-async def send_card_to_user(bot, original_msg: Message, per_msg_value: float, user_total: float, triggers: list):
+async def send_card_to_user(bot, original_msg: Message):
     """
-    Отправляет карточку пользователю (водителю).
-    Формат:
-    [Shop placeholder] [первые слова если нужно] [полный текст сообщения]  (в виде цитаты)
-    +{per_msg} BYN | {user_total} BYN
-    Обнаружены триггеры: {comma separated}
+    Отправляет карточку обычному пользователю:
+    "A.[Название точки] [полный текст сообщения]"
+    Не отправляет TARGET_USER_ID и пользователей из muted_users.
     """
     user_id = original_msg.from_user.id
     if user_id == TARGET_USER_ID:
@@ -317,23 +267,7 @@ async def send_card_to_user(bot, original_msg: Message, per_msg_value: float, us
     shop = shop_name_for_message(original_msg)
     text = original_msg.text or ""
 
-    per_msg_str = format_byn(per_msg_value)
-    total_str = format_byn(user_total)
-
-    triggers_list = triggers_to_strings(triggers)
-    triggers_line = ", ".join(triggers_list) if triggers_list else "—"
-
-    # Build card
-    # First line: shop + original message (quoted)
-    # Use HTML italics for quote
-    lines = [
-        f"{shop} {escape_html(text)}",  # header line, as requested
-        f"<i>{escape_html(text)}</i>",
-        f"<b>+{per_msg_str} BYN</b> | <b>{total_str} BYN</b>",
-        f"Обнаружены триггеры: {escape_html(triggers_line)}"
-    ]
-    card = "\n".join(lines)
-
+    card = f"{shop} {escape_html(text)}"
     try:
         await bot.send_message(user_id, card, parse_mode="HTML")
     except Exception:
@@ -343,7 +277,8 @@ async def send_card_to_user(bot, original_msg: Message, per_msg_value: float, us
 
 def record_message_for_daily_stats(msg: Message, per_msg_value: float, triggers: list):
     """
-    Сохраняем сообщение в daily_stats (по user_id).
+    Сохраняем сообщение в daily_stats (вариант B - всегда).
+    Сохраняем value (BYN) и список триггеров для возможной отладки/отчёта.
     """
     user_id = msg.from_user.id
     key = (msg.chat.id, msg.message_thread_id)
@@ -359,6 +294,7 @@ def record_message_for_daily_stats(msg: Message, per_msg_value: float, triggers:
 def adjust_daily_stats_on_edit(msg: Message, old_value: float):
     """
     Если сообщение отредактировали, корректируем запись и суммарную S.
+    old_value — предыдущее BYN значение для этого сообщения (если известно).
     """
     global daily_trigger_sum
     user_id = msg.from_user.id
@@ -371,8 +307,6 @@ def adjust_daily_stats_on_edit(msg: Message, old_value: float):
             diff = new_value - e.get("value", 0.0)
             if abs(diff) > 1e-9:
                 daily_trigger_sum += diff
-                # also adjust driver_income for that user
-                driver_income[user_id] += diff
             # update entry
             e["text"] = msg.text or ""
             e["ts"] = msg.date.astimezone(TZ)
@@ -383,7 +317,6 @@ def adjust_daily_stats_on_edit(msg: Message, old_value: float):
     new_value, new_triggers = parse_triggers_and_value(msg.text or "")
     record_message_for_daily_stats(msg, new_value, new_triggers)
     daily_trigger_sum += new_value
-    driver_income[user_id] += new_value
 
 # ------------------ ОТЧЁТ / BUILD REPORT ------------------
 
@@ -402,6 +335,7 @@ def build_report_for_user(user_id: int) -> str:
         total = len(entries)
         lines.append(f"Отчет {report_index}:\n{shop}\nВыполнено доставок: {total}\nСписок адресов:")
         for i, e in enumerate(entries, start=1):
+            # show text, and also append a short marker with BYN for that message
             val = e.get("value", 0.0)
             val_str = format_byn(val)
             addr = e.get("text", "")
@@ -413,9 +347,9 @@ def build_report_for_user(user_id: int) -> str:
 
 async def schedule_daily_reset():
     """
-    Сбрасывает daily_stats, daily_trigger_sum и driver_income в 23:59 Europe/Minsk.
+    Сбрасывает daily_stats и суммарную daily_trigger_sum в 23:59 Europe/Minsk.
     """
-    global daily_trigger_sum, driver_income, daily_stats
+    global daily_trigger_sum
     while True:
         now = datetime.now(TZ)
         target = datetime.combine(now.date(), dt_time(23, 59, 0), TZ)
@@ -423,10 +357,9 @@ async def schedule_daily_reset():
             target = target + timedelta(days=1)
         wait_seconds = (target - now).total_seconds()
         await asyncio.sleep(wait_seconds)
-        # Очищаем статистику и суммы
+        # Очищаем статистику и сумму (рейтинги при этом не трогаем)
         daily_stats.clear()
         daily_trigger_sum = 0.0
-        driver_income = defaultdict(float)
         # цикл продолжается
 
 # ------------------ SCHEDULE_CHECK (проверка через 5 минут) ------------------
@@ -461,10 +394,7 @@ async def schedule_check(message_id: int):
 
     # отправляем личную карточку пользователю (всегда, кроме админа и если muted)
     try:
-        # При отправке личной карточки используем driver_income накопленный для этого user
-        uid = msg.from_user.id
-        user_total = driver_income.get(uid, 0.0)
-        await send_card_to_user(msg.bot, msg, value, user_total, context.get("triggers", []))
+        await send_card_to_user(msg.bot, msg)
     except:
         pass
 
@@ -496,12 +426,10 @@ async def handle_edited_message(message: Message):
     old_value = context.get("value", 0.0)
 
     if abs(new_value - old_value) > 1e-9:
-        # обновляем глобальную сумму и driver income
+        # обновляем глобальную сумму
         global daily_trigger_sum
         daily_trigger_sum += (new_value - old_value)
         context["value"] = new_value
-        uid = message.from_user.id
-        driver_income[uid] += (new_value - old_value)
         # обновляем запись в daily_stats
         adjust_daily_stats_on_edit(message, old_value)
 
@@ -534,10 +462,7 @@ async def handle_edited_message(message: Message):
             pass
 
     # --- исправленная часть: отправляем пользователю **текущий текст** ---
-    # При редактировании отправляем карточку пользователю с обновлёнными суммами
-    uid = message.from_user.id
-    user_total = driver_income.get(uid, 0.0)
-    await send_card_to_user(message.bot, message, new_value, user_total, new_triggers)
+    await send_card_to_user(message.bot, message)  # теперь всегда берём message.text
 
 # ------------------ PRIVATE COMMANDS (личные команды от пользователя) ------------------
 
@@ -574,34 +499,16 @@ async def handle_private_command(message: Message):
         await message.reply("Сумма накопленных триггеров обнулена.")
         return
 
-    if text.startswith("/reset"):
-        # локальная команда пользователя — сбрасывает только его значения
-        # вычислим сумму, которую нужно вычесть из global daily_trigger_sum
-        user_entries = daily_stats.get(user_id, {})
-        to_subtract = 0.0
-        for key, entries in user_entries.items():
-            for e in entries:
-                to_subtract += e.get("value", 0.0)
-        # вычитаем из глобальной суммы
-        global daily_trigger_sum
-        daily_trigger_sum = max(0.0, daily_trigger_sum - to_subtract)
-        # очищаем user stats и driver_income для этого user
-        if user_id in daily_stats:
-            daily_stats.pop(user_id, None)
-        driver_income[user_id] = 0.0
-        await message.reply("Ваши счётчики успешно обнулены.")
-        return
-
 # ------------------ ОСНОВНОЙ ХЕНДЛЕР СООБЩЕНИЙ (треды и личка) ------------------
 
-# Создаём bot и dispatcher
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp = Dispatcher()
+async def handle_message(message: Message):
+    # Если в личке — команды
+    if message.chat.type == "private":
+        if message.text and message.text.startswith("/"):
+            await handle_private_command(message)
+        return
 
-# Регистрация хендлеров ниже будет выполнена в main()
-
-async def handle_in_thread_message(message: Message):
-    # В треде (магазины)
+    # В треде
     text = message.text or ""
     chat_id = message.chat.id
     thread_id = message.message_thread_id
@@ -617,29 +524,29 @@ async def handle_in_thread_message(message: Message):
     global daily_trigger_sum
     if per_msg_value:
         daily_trigger_sum += per_msg_value
-        # Мы НЕ добавляем автоматически в driver_income, т.к. driver_income относится к водителям (private)
     record_message_for_daily_stats(message, per_msg_value, triggers)
 
     # Если сообщение сразу корректно (есть хотя бы один '+', включая в составе триггеров)
+    # определяем как наличие символа '+' в тексте
     if "+" in text:
         # повышаем рейтинг
         old, new = update_rating(message.from_user.id, +0.02)
 
-        # создаём pending — corrected True (т.к. уже есть +)
+        # НЕ отправляем reply в тред (по требованию)
+        # создаём pending с reply = None, corrected = True, admin_sent False
         pending[message.message_id] = {
             "message": message,
             "reply": None,
             "corrected": True,
             "admin_sent": False,
-            "value": per_msg_value,
-            "triggers": triggers
+            "value": per_msg_value
         }
 
         # Запускаем таймер, который через 5 минут отправит личную карточку водителю и админ-карточку
         asyncio.create_task(schedule_check(message.message_id))
         return
 
-    # Если триггера нет — даём предупреждение и ждём 5 минут
+    # Если триггера нет — выдаём предупреждение и ждём 5 минут
     check_time = datetime.now(TZ) + timedelta(minutes=5)
     formatted = check_time.strftime("%d.%m.%y в %H:%M")
 
@@ -654,63 +561,24 @@ async def handle_in_thread_message(message: Message):
         "reply": reply,
         "corrected": False,
         "admin_sent": False,
-        "value": per_msg_value,
-        "triggers": triggers
+        "value": per_msg_value
     }
 
     asyncio.create_task(schedule_check(message.message_id))
 
-async def handle_private_message(message: Message):
-    """
-    При личном сообщении (личка) — если это команда, обрабатываем в handle_private_command.
-    Если это обычное сообщение от водителя — парсим триггеры; если триггеров нет — игнорируем.
-    Если триггеры найдены — обновляем driver_income[user], daily_trigger_sum (global),
-    записываем в daily_stats и отправляем пользователю форматированную карточку.
-    """
-    # команды
-    if message.text and message.text.startswith("/"):
-        await handle_private_command(message)
-        return
-
-    # если пользователь замьючен — не отвечаем
-    user_id = message.from_user.id
-    if user_id in muted_users:
-        return
-
-    text = message.text or ""
-    if not text.strip():
-        return
-
-    # парсим триггеры
-    per_msg_value, triggers = parse_triggers_and_value(text)
-    # реагируем только если найдены триггеры (total>0)
-    if per_msg_value <= 0 or not triggers:
-        return
-
-    # обновляем глобальную сумму и user income
-    global daily_trigger_sum
-    daily_trigger_sum += per_msg_value
-    driver_income[user_id] += per_msg_value
-
-    # сохраняем в daily_stats (заметим: для private сообщений у нас нет chat/thread; используем (0,0) ключ)
-    key = (message.chat.id, message.message_thread_id)
-    record_message_for_daily_stats(message, per_msg_value, triggers)
-
-    # отправляем карточку только пользователю (в виде личного отчёта)
-    user_total = driver_income.get(user_id, 0.0)
-    await send_card_to_user(message.bot, message, per_msg_value, user_total, triggers)
-
-# ------------------ РЕГИСТРАЦИЯ ХЕНДЛЕРОВ ------------------
-
-# регистрируем отдельно: треды и личку/редактирование
-dp.message.register(handle_in_thread_message)
-dp.edited_message.register(handle_edited_message)
-dp.message.register(handle_private_message, lambda m: m.chat.type == "private")
-
 # ------------------ ЗАПУСК БОТА ------------------
 
 async def main():
-    # запускаем фоновую задачу для ежедневного сброса статистики
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode="HTML")
+    )
+    dp = Dispatcher()
+
+    dp.message.register(handle_message)
+    dp.edited_message.register(handle_edited_message)
+
+    # запуск фоновой задачи для ежедневного сброса статистики
     asyncio.create_task(schedule_daily_reset())
 
     print("Бот запущен...")
