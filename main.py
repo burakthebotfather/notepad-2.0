@@ -327,9 +327,9 @@ async def handle_private_command(message: Message):
 
 # ------------------ MAIN MESSAGE HANDLER ------------------
 
-async def handle_message(message: Message):
-    global daily_trigger_sum
+# ------------------ MAIN MESSAGE HANDLER ------------------
 
+async def handle_message(message: Message):
     if message.chat.type == "private":
         if message.text and message.text.startswith("/"):
             await handle_private_command(message)
@@ -340,21 +340,11 @@ async def handle_message(message: Message):
         return
 
     text = message.text or ""
-    value, triggers = parse_triggers_and_value(text)
 
-    record_message_for_daily_stats(message, value, triggers)
-
-    # ✅ КОРРЕКТНАЯ ОТМЕТКА
-    if value > 0:
-        daily_trigger_sum += value
-        update_rating(message.from_user.id, +0.02)
-        await send_card_to_admin(message.bot, message, value)
-        return
-
-    # ❌ НЕКОРРЕКТНАЯ ОТМЕТКА → предупреждение + pending
+    # ⚠️ ВСЕ сообщения кладём в pending
     reply = await message.reply(
-        "Отметка не принята. Основной триггер не обнаружен. "
-        "Отредактируйте сообщение в течение 5 минут."
+        "Сообщение принято. Проверка через 5 минут.\n"
+        "Вы можете отредактировать сообщение при необходимости."
     )
 
     pending[message.message_id] = {
@@ -363,7 +353,6 @@ async def handle_message(message: Message):
         "text": text,
         "reply": reply,
         "corrected": False,
-        "value": 0.0,
         "created_at": datetime.now(TZ)
     }
 
