@@ -327,9 +327,9 @@ async def handle_private_command(message: Message):
 
 # ------------------ MAIN MESSAGE HANDLER ------------------
 
-# ------------------ MAIN MESSAGE HANDLER ------------------
-
 async def handle_message(message: Message):
+    global daily_trigger_sum
+
     if message.chat.type == "private":
         if message.text and message.text.startswith("/"):
             await handle_private_command(message)
@@ -340,21 +340,41 @@ async def handle_message(message: Message):
         return
 
     text = message.text or ""
+    value, triggers = parse_triggers_and_value(text)
 
-    # ⚠️ ВСЕ сообщения кладём в pending
+    record_message_for_daily_stats(message, value, triggers)
+
+    if value > 0:
+        daily_trigger_sum += value
+
+    if "+" in text:
+        update_rating(message.from_user.id, +0.02)
+        pending[message.message_id] = {
+    "chat_id": message.chat.id,
+    "message_id": message.message_id,
+    "text": message.text or "",
+    "reply": reply,
+    "corrected": False,
+    "value": value,
+    "created_at": datetime.now(TZ)
+}
+        asyncio.create_task(schedule_check(message.message_id))
+        return
+
     reply = await message.reply(
-        "Сообщение принято. Проверка через 5 минут.\n"
-        "Вы можете отредактировать сообщение при необходимости."
+        "Отметка не принята. Основной триггер не обнаружен. "
+        "Отредактируйте сообщение в течение 5 минут."
     )
 
     pending[message.message_id] = {
-        "chat_id": message.chat.id,
-        "message_id": message.message_id,
-        "text": text,
-        "reply": reply,
-        "corrected": False,
-        "created_at": datetime.now(TZ)
-    }
+    "chat_id": message.chat.id,
+    "message_id": message.message_id,
+    "text": message.text or "",
+    "reply": reply,
+    "corrected": False,
+    "value": value,
+    "created_at": datetime.now(TZ)
+}
 
     asyncio.create_task(schedule_check(message.message_id))
 
