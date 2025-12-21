@@ -251,6 +251,8 @@ def adjust_daily_stats_on_edit(msg: Message, old_value: float):
 # ------------------ EDIT HANDLER ------------------
 
 async def handle_edited_message(message: Message):
+    update_pending_on_edit(message)
+
     msg_id = message.message_id
     new_value, new_triggers = parse_triggers_and_value(message.text or "")
 
@@ -348,10 +350,14 @@ async def handle_message(message: Message):
     if "+" in text:
         update_rating(message.from_user.id, +0.02)
         pending[message.message_id] = {
-            "message": message,
-            "corrected": True,
-            "value": value
-        }
+    "chat_id": message.chat.id,
+    "message_id": message.message_id,
+    "text": message.text or "",
+    "reply": reply,
+    "corrected": False,
+    "value": value,
+    "created_at": datetime.now(TZ)
+}
         asyncio.create_task(schedule_check(message.message_id))
         return
 
@@ -361,11 +367,14 @@ async def handle_message(message: Message):
     )
 
     pending[message.message_id] = {
-        "message": message,
-        "reply": reply,
-        "corrected": False,
-        "value": value
-    }
+    "chat_id": message.chat.id,
+    "message_id": message.message_id,
+    "text": message.text or "",
+    "reply": reply,
+    "corrected": False,
+    "value": value,
+    "created_at": datetime.now(TZ)
+}
 
     asyncio.create_task(schedule_check(message.message_id))
 
