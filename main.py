@@ -344,37 +344,28 @@ async def handle_message(message: Message):
 
     record_message_for_daily_stats(message, value, triggers)
 
+    # ✅ КОРРЕКТНАЯ ОТМЕТКА
     if value > 0:
         daily_trigger_sum += value
-
-    if "+" in text:
         update_rating(message.from_user.id, +0.02)
-        pending[message.message_id] = {
-    "chat_id": message.chat.id,
-    "message_id": message.message_id,
-    "text": message.text or "",
-    "reply": reply,
-    "corrected": False,
-    "value": value,
-    "created_at": datetime.now(TZ)
-}
-        asyncio.create_task(schedule_check(message.message_id))
+        await send_card_to_admin(message.bot, message, value)
         return
 
+    # ❌ НЕКОРРЕКТНАЯ ОТМЕТКА → предупреждение + pending
     reply = await message.reply(
         "Отметка не принята. Основной триггер не обнаружен. "
         "Отредактируйте сообщение в течение 5 минут."
     )
 
     pending[message.message_id] = {
-    "chat_id": message.chat.id,
-    "message_id": message.message_id,
-    "text": message.text or "",
-    "reply": reply,
-    "corrected": False,
-    "value": value,
-    "created_at": datetime.now(TZ)
-}
+        "chat_id": message.chat.id,
+        "message_id": message.message_id,
+        "text": text,
+        "reply": reply,
+        "corrected": False,
+        "value": 0.0,
+        "created_at": datetime.now(TZ)
+    }
 
     asyncio.create_task(schedule_check(message.message_id))
 
