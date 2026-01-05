@@ -92,57 +92,116 @@ RE_GAB = re.compile(r"\bгаб\b", re.I)
 RE_PLUS = re.compile(r"\+")
 
 def parse_triggers_and_value(text: str):
-    text = (text or "").lower()
+    """
+    Парсер триггеров:
+    - считается только часть СПРАВА от первого '+'
+    - триггер 'и' дает +0.93 BYN
+    - 'н' после '+' дает множитель x1.5
+    - габариты и километры учитываются
+    """
+
+    raw = (text or "").lower()
     total = 0.0
     used = []
     triggers = []
 
-    def overlaps(s, e):
-        return any(not (e <= a or s >= b) for a, b in used)
+    # --- ищем первый '+' ---
+    idx = raw.find("+")
+    if idx == -1:
+        return 0.0, []
 
-    for m in RE_MK_COLOR.finditer(text):
+    # --- текст справа от '+', только здесь ищем триггеры ---
+    work_text = raw[idx + 1 :]
+
+    # ====================================================
+    # 1) Базовый плюс
+    # ====================================================
+    total += TRIGGER_BASE_PLUS
+    triggers.append({"type": "plus", "value": TRIGGER_BASE_PLUS})
+    used.append((idx, idx + 1))
+
+    # ====================================================
+    # 2) Цветные MK (если есть)
+    # ====================================================
+    for m in RE_MK_COLOR.finditer(work_text):
         s, e = m.span()
-        if overlaps(s, e):
+        # скорректированные позиции относительно общего текста
+        rs, re_ = idx + 1 + s, idx + 1 + e
+        if any(not (re_ <= a or rs >= b) for a, b in used):
             continue
         color = m.group(1).replace("-", "")
         val = MK_COLOR_VALUES.get(color, MK_GENERIC)
         total += val
-        used.append((s, e))
+        used.append((rs, re_))
         triggers.append({"type": "mk_color", "value": val})
 
-    for m in RE_MK.finditer(text):
+    # ====================================================
+    # 3) MK без цвета
+    # ====================================================
+    for m in RE_MK.finditer(work_text):
         s, e = m.span()
-        if overlaps(s, e):
+        rs, re_ = idx + 1 + s, idx + 1 + e
+        if any(not (re_ <= a or rs >= b) for a, b in used):
             continue
         total += MK_GENERIC
-        used.append((s, e))
+        used.append((rs, re_))
         triggers.append({"type": "mk", "value": MK_GENERIC})
 
-    for m in RE_GAB_MULT.finditer(text):
+    # ====================================================
+    # 4) Габариты
+    # ====================================================
+    for m in RE_GAB_MULT.finditer(work_text):
         s, e = m.span()
-        if overlaps(s, e):
+        rs, re_ = idx + 1 + s, idx + 1 + e
+        if any(not (re_ <= a or rs >= b) for a, b in used):
             continue
         mul = int(m.group(1))
         val = mul * GAB_VALUE
         total += val
-        used.append((s, e))
+        used.append((rs, re_))
         triggers.append({"type": "gab_mult", "value": val})
 
-    for m in RE_GAB.finditer(text):
+    for m in RE_GAB.finditer(work_text):
         s, e = m.span()
-        if overlaps(s, e):
+        rs, re_ = idx + 1 + s, idx + 1 + e
+        if any(not (re_ <= a or rs >= b) for a, b in used):
             continue
         total += GAB_VALUE
-        used.append((s, e))
+        used.append((rs, re_))
         triggers.append({"type": "gab", "value": GAB_VALUE})
 
-    for m in RE_PLUS.finditer(text):
+    # ====================================================
+    # 5) "и" — уточнение адреса
+    # ====================================================
+    for m in re.finditer(r"\bи\b", work_text):
         s, e = m.span()
-        if overlaps(s, e):
+        rs, re_ = idx + 1 + s, idx + 1 + e
+        if any(not (re_ <= a or rs >= b) for a, b in used):
             continue
-        total += TRIGGER_BASE_PLUS
-        used.append((s, e))
-        triggers.append({"type": "plus", "value": TRIGGER_BASE_PLUS})
+        # триггер "и" стоит в work_text, учитываем
+        total += 0.93
+        used.append((rs, re_))
+        triggers.append({"type": "info_i", "value": 0.93})
+
+    # ====================================================
+    # 6) Километры :K — целое число
+    # ====================================================
+    for m in re.finditer(r":\s*(\d+)", work_text):
+        s, e = m.span()
+        rs, re_ = idx + 1 + s, idx + 1 + e
+        if any(not (re_ <= a or rs >= b) for a, b in used):
+            continue
+        try:
+            k = int(m.group(1))
+            total += float(k)
+            used.append((rs, re_))
+            triggers.append({"type": "kilometers", "value": float(k)})
+        except:
+            continue
+
+    if re.search(r"\bн\b", work_text):
+        total = total * 1.5
+        triggers.append({"type": "night_multiplier", "value": 1.5})
 
     return total, triggers
 
